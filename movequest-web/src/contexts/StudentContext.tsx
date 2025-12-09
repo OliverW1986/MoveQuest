@@ -1,4 +1,6 @@
-import { createContext, useContext, ReactNode, useState } from 'react';
+"use client";
+
+import { createContext, useContext, ReactNode, useState, useEffect } from 'react';
 
 interface Student {
   id: string;
@@ -35,6 +37,16 @@ interface StudentProviderProps {
 
 export function StudentProvider({ children, students, loading, error }: StudentProviderProps) {
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+
+  useEffect(() => {
+    if (selectedStudent) {
+      const updatedStudent = students.find(student => student.id === selectedStudent.id);
+      if (updatedStudent) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSelectedStudent(updatedStudent);
+      }
+    }
+  }, [selectedStudent, students]);
 
   return (
     <StudentContext.Provider value={{ students, loading, error, selectedStudent, setSelectedStudent }}>

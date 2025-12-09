@@ -1,13 +1,15 @@
 "use client";
 
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { useState, useEffect } from 'react';
-import { Student } from '@/types/student';
 import { useFirebaseData } from '@/hooks/useFirebaseData';
+import { useStudents } from '@/contexts/StudentContext';
 
 export default function Dashboard() {
-  const { students, classData, loading, error } = useFirebaseData();
+  const { classData, loading, error } = useFirebaseData();
+  const { selectedStudent, students } = useStudents();
+
+  const stepLeader = students.reduce((leader, student) => {
+    return (student.stepsToday || 0) > (leader.stepsToday || 0) ? student : leader;
+  }, students[0] || { name: 'N/A', stepsToday: 0 });
 
   if (loading) {
     return (
@@ -44,7 +46,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <StatsCard
           title="Total Steps"
-          value={classData.totalSteps.toString()}
+          value={classData.totalSteps.toLocaleString()}
           icon="👟"
           color="bg-accent"
         />
@@ -56,29 +58,32 @@ export default function Dashboard() {
         />
         <StatsCard
           title="Step Leader"
-          value={classData.stepLeader}
+          value={`${stepLeader.name} - ${stepLeader.stepsToday?.toLocaleString() || '0'} steps`}
           icon="🥇"
           color="bg-orange-600"
         />
       </div>
 
-      <div>
-        <h2 className="text-xl font-semibold text-foreground mb-4">Nate Cooley&apos;s Data</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <StatsCard
-            title="Steps Today"
-            value="8,542"
-            icon="👟"
-            color="bg-accent"
-          />
-          <StatsCard
-            title="Total Points"
-            value="1,250"
-            icon="⭐"
-            color="bg-yellow-600"
-          />
+      {selectedStudent && (
+        <div>
+          <h2 className="text-xl font-semibold text-foreground mb-4">{selectedStudent.name}&apos;s Data</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <StatsCard
+              title="Steps Today"
+              value={selectedStudent.stepsToday?.toLocaleString() || '0'}
+              icon="👟"
+              color="bg-accent"
+            />
+            <StatsCard
+              title="Total Points"
+              value={selectedStudent.totalPoints?.toLocaleString() || '0'}
+              icon="⭐"
+              color="bg-yellow-600"
+            />
+          </div>
         </div>
-      </div>
+      )}
+
 
       {/* Quick Actions */}
       <div className="bg-surface rounded-lg p-6 border border-border">

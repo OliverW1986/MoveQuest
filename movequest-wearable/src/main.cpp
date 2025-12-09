@@ -35,8 +35,8 @@ void sendToFirestore() {
 
   String url = "https://firestore.googleapis.com/v1/projects/";
   url += FIREBASE_PROJECT;
-  url += "/databases/(default)/documents/wearables/";
-  url += DEVICE_ID;
+  url += "/databases/(default)/documents/students/";
+  url += STUDENT_ID;
   url += "?key=";
   url += FIREBASE_API_KEY;
 
@@ -46,8 +46,11 @@ void sendToFirestore() {
   StaticJsonDocument<256> jsonDoc;
   JsonObject data = jsonDoc.createNestedObject("fields");
 
-  data["stepCount"]["integerValue"] = stepCount;
-  data["postureScore"]["integerValue"] = postureScore;
+  data["id"]["stringValue"] = STUDENT_ID;
+  data["name"]["stringValue"] = "Oliver";
+  data["stepsToday"]["integerValue"] = stepCount;
+  data["totalPoints"]["integerValue"] = 1500;
+  data["level"]["integerValue"] = 5;
 
   String json;
   serializeJson(jsonDoc, json);
@@ -77,7 +80,7 @@ void setup() {
 
 void loop() {
   stepCount += random(1, 5);
-  postureScore = 90 + random(-5, 6);
+  // postureScore = 90 + random(-5, 6);
 
   if (millis() - lastSendTime >= sendInterval) {
     Serial.println("Sending data to Firestore...");

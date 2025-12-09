@@ -5,7 +5,7 @@
 #include "secrets.h"
 
 unsigned long lastSendTime = 0;
-const int sendInterval = 10000;
+const int sendInterval = 1000;
 
 int stepCount = 0;
 int postureScore = 100;

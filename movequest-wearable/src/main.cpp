@@ -3,6 +3,9 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_LIS3DH.h>
 
 unsigned long lastSendTime = 0;
 const int sendInterval = 1000;
@@ -72,21 +75,54 @@ void sendToFirestore() {
   http.end();
 }
 
+Adafruit_LIS3DH lis = Adafruit_LIS3DH();
+
 void setup() {
   Serial.begin(115200);
+  Wire.begin();
   pinMode(LED_BUILTIN, OUTPUT);
-  connectToWifi();
+  digitalWrite(LED_BUILTIN, LOW);
+
+  Serial.println("LIS3DH Test");
+
+  if (!lis.begin(0x18))
+  {
+    Serial.println("Could not start LIS3DH");
+    while (1)
+    {
+      delay(10);
+    }
+  }
+  
+  Serial.println("LIS3DH found!");
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  lis.setRange(LIS3DH_RANGE_2_G);
+
+  // pinMode(LED_BUILTIN, OUTPUT);
+  // connectToWifi();
 }
 
 void loop() {
-  stepCount += random(1, 5);
-  // postureScore = 90 + random(-5, 6);
+  lis.read();
 
-  if (millis() - lastSendTime >= sendInterval) {
-    Serial.println("Sending data to Firestore...");
-    sendToFirestore();
-    lastSendTime = millis();
-  }
+  Serial.print("X: "); Serial.print(lis.x); Serial.print("  ");
+  Serial.print("Y: "); Serial.print(lis.y); Serial.print("  ");
+  Serial.print("Z: "); Serial.print(lis.z); Serial.print("  ");
+  Serial.println("mg");
+  delay(500);
 
-  delay(100);
+  // Send data to Firestore
+  // stepCount += random(1, 5);
+  // // postureScore = 90 + random(-5, 6);
+
+  // if (millis() - lastSendTime >= sendInterval) {
+  //   Serial.println("Sending data to Firestore...");
+  //   sendToFirestore();
+  //   lastSendTime = millis();
+  // }
+
+  // delay(100);
+
+
 }

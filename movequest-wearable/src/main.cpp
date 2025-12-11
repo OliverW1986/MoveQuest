@@ -1,17 +1,70 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WebServer.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_LIS3DH.h>
+#include <Math.h>
+
+#define STEP_THRESHOLD 1.2f
+#define STEP_DEBOUNCE_MS 250
+
+WebServer server(80);
 
 unsigned long lastSendTime = 0;
 const int sendInterval = 1000;
 
+unsigned long lastStepTime = 0;
 int stepCount = 0;
-int postureScore = 100;
+
+float previousMagnitude = 0.0f;
+float filtered = 0.0f;
+
+float current_ax = 0.0f;
+float current_ay = 0.0f;
+float current_az = 0.0f;
+float current_magnitude = 0.0f;
+float current_filtered_magnitude = 0.0f;
+
+Adafruit_LIS3DH lis = Adafruit_LIS3DH();
+
+bool headerPrinted = false;
+
+void processAccelerometer(float ax, float ay, float az) {
+  float magnitude = sqrtf(ax * ax + ay * ay + az * az);
+  current_magnitude = magnitude;
+
+  filtered = 0.9f * filtered + 0.1f * (magnitude - 1.0f);
+
+  current_filtered_magnitude = filtered;
+
+  unsigned long now = millis();
+  if (filtered > STEP_THRESHOLD) {
+    if (now - lastStepTime > STEP_DEBOUNCE_MS) {
+      stepCount++;
+      lastStepTime = now;
+      Serial.print("Step detected! Total steps: ");
+      Serial.println(stepCount);
+    }
+  }
+
+  previousMagnitude = magnitude;
+}
+
+void handleData() {
+  String response = String(millis()) + "," +
+                    String(current_ax, 4) + "," +
+                    String(current_ay, 4) + "," +
+                    String(current_az, 4) + "," +
+                    String(current_magnitude, 4) + "," +
+                    String(current_filtered_magnitude, 4) + "," +
+                    String(stepCount) + "\n";
+
+  server.send(200, "text/plain", response);
+}
 
 void connectToWifi() {
   Serial.println("Connecting to WiFi...");
@@ -75,8 +128,6 @@ void sendToFirestore() {
   http.end();
 }
 
-Adafruit_LIS3DH lis = Adafruit_LIS3DH();
-
 void setup() {
   Serial.begin(115200);
   Wire.begin();
@@ -95,34 +146,27 @@ void setup() {
   }
   
   Serial.println("LIS3DH found!");
-  digitalWrite(LED_BUILTIN, HIGH);
 
   lis.setRange(LIS3DH_RANGE_2_G);
+  lis.setDataRate(LIS3DH_DATARATE_50_HZ);
 
-  // pinMode(LED_BUILTIN, OUTPUT);
-  // connectToWifi();
+  connectToWifi();
+  
+  server.on("/data", handleData);
+  server.begin();
+  Serial.println("HTTP server started");
 }
 
 void loop() {
+  server.handleClient();
+
   lis.read();
 
-  Serial.print("X: "); Serial.print(lis.x); Serial.print("  ");
-  Serial.print("Y: "); Serial.print(lis.y); Serial.print("  ");
-  Serial.print("Z: "); Serial.print(lis.z); Serial.print("  ");
-  Serial.println("mg");
-  delay(500);
+  current_ax = lis.x_g;
+  current_ay = lis.y_g;
+  current_az = lis.z_g;
 
-  // Send data to Firestore
-  // stepCount += random(1, 5);
-  // // postureScore = 90 + random(-5, 6);
+  processAccelerometer(current_ax, current_ay, current_az);
 
-  // if (millis() - lastSendTime >= sendInterval) {
-  //   Serial.println("Sending data to Firestore...");
-  //   sendToFirestore();
-  //   lastSendTime = millis();
-  // }
-
-  // delay(100);
-
-
+  delay(20);
 }

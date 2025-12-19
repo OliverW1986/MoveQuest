@@ -1,4 +1,4 @@
-import { auth } from './firebase';
+import { getAuthInstance } from './firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, User } from 'firebase/auth';
 
 export interface AuthUser {
@@ -9,6 +9,7 @@ export interface AuthUser {
 
 export async function signIn(email: string, password: string): Promise<AuthUser> {
   try {
+    const auth = getAuthInstance();
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     return {
@@ -24,6 +25,7 @@ export async function signIn(email: string, password: string): Promise<AuthUser>
 
 export async function signUp(email: string, password: string): Promise<AuthUser> {
   try {
+    const auth = getAuthInstance();
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     return {
@@ -39,6 +41,7 @@ export async function signUp(email: string, password: string): Promise<AuthUser>
 
 export async function logout(): Promise<void> {
   try {
+    const auth = getAuthInstance();
     await signOut(auth);
   } catch (error) {
     console.error('Logout error:', error);
@@ -47,5 +50,6 @@ export async function logout(): Promise<void> {
 }
 
 export function getCurrentUser(): User | null {
+  const auth = getAuthInstance();
   return auth.currentUser;
 }

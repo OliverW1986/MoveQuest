@@ -1,4 +1,4 @@
-import { db } from './firebase';
+import { getDb } from './firebase';
 import { 
   collection, 
   doc, 
@@ -15,6 +15,7 @@ import {
 // Generic firestore operations
 export async function getCollection<T>(collectionName: string): Promise<T[]> {
   try {
+    const db = getDb();
     const querySnapshot = await getDocs(collection(db, collectionName));
     return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as T));
   } catch (error) {
@@ -25,6 +26,7 @@ export async function getCollection<T>(collectionName: string): Promise<T[]> {
 
 export async function getDocument<T>(collectionName: string, docId: string): Promise<T | null> {
   try {
+    const db = getDb();
     const docRef = doc(db, collectionName, docId);
     const docSnap = await getDoc(docRef);
     
@@ -41,6 +43,7 @@ export async function getDocument<T>(collectionName: string, docId: string): Pro
 
 export async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>): Promise<string> {
   try {
+    const db = getDb();
     const docRef = await addDoc(collection(db, collectionName), data);
     return docRef.id;
   } catch (error) {
@@ -51,6 +54,7 @@ export async function addDocument<T>(collectionName: string, data: Omit<T, 'id'>
 
 export async function updateDocument<T>(collectionName: string, docId: string, data: Partial<T>): Promise<void> {
   try {
+    const db = getDb();
     const docRef = doc(db, collectionName, docId);
     await updateDoc(docRef, data);
   } catch (error) {
@@ -61,6 +65,7 @@ export async function updateDocument<T>(collectionName: string, docId: string, d
 
 export async function deleteDocument(collectionName: string, docId: string): Promise<void> {
   try {
+    const db = getDb();
     await deleteDoc(doc(db, collectionName, docId));
   } catch (error) {
     console.error(`Error deleting document ${docId}:`, error);

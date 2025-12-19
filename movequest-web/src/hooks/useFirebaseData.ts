@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
+import { getDb } from '@/lib/firebase';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { Student, ClassData } from '@/types/student';
 
@@ -14,6 +14,7 @@ export function useFirebaseData() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const db = getDb();
     const studentsRef = collection(db, 'students');
     const q = query(studentsRef, orderBy('totalPoints', 'desc'));
 

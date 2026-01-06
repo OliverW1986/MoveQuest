@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
-#include <WebServer.h>
+// #include <WebServer.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
 #include <Wire.h>
@@ -12,7 +12,7 @@
 #define STEP_THRESHOLD 1.2f
 #define STEP_DEBOUNCE_MS 250
 
-WebServer server(80);
+// WebServer server(80);
 
 unsigned long lastSendTime = 0;
 const int sendInterval = 1000;
@@ -54,17 +54,17 @@ void processAccelerometer(float ax, float ay, float az) {
   previousMagnitude = magnitude;
 }
 
-void handleData() {
-  String response = String(millis()) + "," +
-                    String(current_ax, 4) + "," +
-                    String(current_ay, 4) + "," +
-                    String(current_az, 4) + "," +
-                    String(current_magnitude, 4) + "," +
-                    String(current_filtered_magnitude, 4) + "," +
-                    String(stepCount) + "\n";
+// void handleData() {
+//   String response = String(millis()) + "," +
+//                     String(current_ax, 4) + "," +
+//                     String(current_ay, 4) + "," +
+//                     String(current_az, 4) + "," +
+//                     String(current_magnitude, 4) + "," +
+//                     String(current_filtered_magnitude, 4) + "," +
+//                     String(stepCount) + "\n";
 
-  server.send(200, "text/plain", response);
-}
+//   server.send(200, "text/plain", response);
+// }
 
 void connectToWifi() {
   Serial.println("Connecting to WiFi...");
@@ -130,7 +130,7 @@ void sendToFirestore() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin();
+  Wire.begin(26, 25);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
@@ -147,18 +147,20 @@ void setup() {
   
   Serial.println("LIS3DH found!");
 
+  // digitalWrite(LED_BUILTIN, HIGH); // Indicate LIS3DH initialized
+
   lis.setRange(LIS3DH_RANGE_2_G);
   lis.setDataRate(LIS3DH_DATARATE_50_HZ);
 
   connectToWifi();
   
-  server.on("/data", handleData);
-  server.begin();
-  Serial.println("HTTP server started");
+  // server.on("/data", handleData);
+  // server.begin();
+  // Serial.println("HTTP server started");
 }
 
 void loop() {
-  server.handleClient();
+  // server.handleClient();
 
   lis.read();
 

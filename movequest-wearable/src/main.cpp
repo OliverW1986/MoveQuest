@@ -19,7 +19,7 @@
 #define STEP_DEBOUNCE_MS 250
 
 unsigned long lastSendTime = 0;
-const int sendInterval = 1000;
+const int sendInterval = 500;
 
 unsigned long lastStepTime = 0;
 int stepCount = 0;
@@ -77,8 +77,9 @@ void sendToPythonServer() {
   }
   
   HTTPClient http;
-  String url = "http://153.91.106.159:5000/api/step-data";  // Replace with your computer's IP
+  String url = "http://172.20.10.3:5000/api/step-data";  // Replace with your computer's IP
   
+  http.setTimeout(5000);  // 5 second timeout
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
   
@@ -91,6 +92,9 @@ void sendToPythonServer() {
   String json;
   serializeJson(jsonDoc, json);
   
+  Serial.print("Sending to: ");
+  Serial.println(url);
+  
   int httpResponseCode = http.POST(json);
   
   if (httpResponseCode > 0) {
@@ -101,8 +105,12 @@ void sendToPythonServer() {
     Serial.print(" | Filtered: ");
     Serial.println(current_filtered_magnitude);
   } else {
-    Serial.print("Error sending to Python server: ");
-    Serial.println(httpResponseCode);
+    Serial.print("Error sending to Python server. Code: ");
+    Serial.print(httpResponseCode);
+    Serial.print(" | URL: ");
+    Serial.println(url);
+    Serial.print("Error: ");
+    Serial.println(http.errorToString(httpResponseCode));
   }
   
   http.end();
@@ -118,6 +126,7 @@ void connectToWifi() {
   }
   Serial.println("\nWiFi connected");
   digitalWrite(LED_BUILTIN, HIGH); // Turn on LED to indicate successful connection
+  digitalWrite(LED_PIN, HIGH); // Turn on another LED to indicate successful connection
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 }

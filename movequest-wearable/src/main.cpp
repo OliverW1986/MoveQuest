@@ -9,10 +9,14 @@
 #include <Adafruit_LIS3DH.h>
 #include <Math.h>
 
+#define MOTOR_PIN 14
+#define LED_PIN 33
+
+#define LIS3DH_SDA_PIN 26
+#define LIS3DH_SCL_PIN 25
+
 #define STEP_THRESHOLD 1.2f
 #define STEP_DEBOUNCE_MS 250
-
-// WebServer server(80);
 
 unsigned long lastSendTime = 0;
 const int sendInterval = 1000;
@@ -65,6 +69,44 @@ void processAccelerometer(float ax, float ay, float az) {
 
 //   server.send(200, "text/plain", response);
 // }
+
+void sendToPythonServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected. Cannot send data to Python server.");
+    return;
+  }
+  
+  HTTPClient http;
+  String url = "http://153.91.106.159:5000/api/step-data";  // Replace with your computer's IP
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  StaticJsonDocument<256> jsonDoc;
+  jsonDoc["timestamp"] = millis() / 1000.0f;
+  jsonDoc["steps"] = stepCount;
+  jsonDoc["raw_magnitude"] = current_magnitude;
+  jsonDoc["filtered_magnitude"] = current_filtered_magnitude;
+  
+  String json;
+  serializeJson(jsonDoc, json);
+  
+  int httpResponseCode = http.POST(json);
+  
+  if (httpResponseCode > 0) {
+    Serial.print("[Python Server] Steps: ");
+    Serial.print(stepCount);
+    Serial.print(" | Raw: ");
+    Serial.print(current_magnitude);
+    Serial.print(" | Filtered: ");
+    Serial.println(current_filtered_magnitude);
+  } else {
+    Serial.print("Error sending to Python server: ");
+    Serial.println(httpResponseCode);
+  }
+  
+  http.end();
+}
 
 void connectToWifi() {
   Serial.println("Connecting to WiFi...");
@@ -134,6 +176,12 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
+  // pinMode(14, OUTPUT);
+  // digitalWrite(14, LOW);
+
+  // pinMode(33, OUTPUT);
+  // digitalWrite(33, HIGH);
+
   Serial.println("LIS3DH Test");
 
   if (!lis.begin(0x18))
@@ -147,16 +195,12 @@ void setup() {
   
   Serial.println("LIS3DH found!");
 
-  // digitalWrite(LED_BUILTIN, HIGH); // Indicate LIS3DH initialized
+  digitalWrite(LED_BUILTIN, HIGH); // Indicate LIS3DH initialized
 
   lis.setRange(LIS3DH_RANGE_2_G);
   lis.setDataRate(LIS3DH_DATARATE_50_HZ);
 
   connectToWifi();
-  
-  // server.on("/data", handleData);
-  // server.begin();
-  // Serial.println("HTTP server started");
 }
 
 void loop() {
@@ -169,6 +213,21 @@ void loop() {
   current_az = lis.z_g;
 
   processAccelerometer(current_ax, current_ay, current_az);
+
+  unsigned long now = millis();
+  if (now - lastSendTime >= sendInterval) {
+    sendToPythonServer();
+    // sendToFirestore();  // Uncomment when ready to send to Firestore
+    lastSendTime = now;
+  }
+
+  // motorTimer += 20.0f;
+  // if (motorTimer >= motorInterval) {
+  //   motorTimer = 0.0f;
+  //   digitalWrite(14, HIGH);
+  //   delay(100);
+  //   digitalWrite(14, LOW);
+  // }
 
   delay(20);
 }

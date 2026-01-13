@@ -15,7 +15,7 @@
 #define LIS3DH_SDA_PIN 26
 #define LIS3DH_SCL_PIN 25
 
-#define STEP_THRESHOLD 1.2f
+#define STEP_THRESHOLD 0.6f
 #define STEP_DEBOUNCE_MS 250
 
 unsigned long lastSendTime = 0;

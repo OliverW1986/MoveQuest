@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "movequest-web"
+		},
+		{
+			"path": "movequest-dashboard"
 		}
 	],
 	"settings": {}

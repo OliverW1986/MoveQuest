@@ -1,72 +1,187 @@
-import socket
+import asyncio
 import json
+import csv
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from collections import deque
 from datetime import datetime
+import matplotlib.dates as mdates
 import threading
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 from waitress import serve
 import os
+from pathlib import Path
+
+from bleak import BleakClient, BleakScanner
 
 # Configuration
 PORT = 5000
 MAX_DATA_POINTS = 200  # Keep last 200 data points
+DEVICE_NAME_PREFIX = "MoveQuest-Wearable"  # Will match devices starting with this
+SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+LOG_DIR = Path("logs")
 
 app = Flask(__name__)
 
-# Data storage
+# Data storage per device
 class DataStore:
-    def __init__(self):
-        self.timestamps = deque(maxlen=MAX_DATA_POINTS)
+    def __init__(self, device_name):
+        self.device_name = device_name
+        self.host_ts = deque(maxlen=MAX_DATA_POINTS)      # wall-clock on receipt
+        self.device_ts = deque(maxlen=MAX_DATA_POINTS)    # seconds since boot (from device)
         self.steps = deque(maxlen=MAX_DATA_POINTS)
         self.raw_accel = deque(maxlen=MAX_DATA_POINTS)
         self.filtered_accel = deque(maxlen=MAX_DATA_POINTS)
+        self.last_buzz = deque(maxlen=MAX_DATA_POINTS)    # last buzz wall-clock (host time when received)
         self.lock = threading.Lock()
+        self.log_file = self._init_log_file()
     
-    def add_data(self, timestamp, steps, raw, filtered):
+    def _init_log_file(self):
+        """Initialize CSV log file for this device."""
+        LOG_DIR.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_path = LOG_DIR / f"{self.device_name}_{timestamp}.csv"
+        
+        with open(log_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['host_timestamp', 'device_timestamp', 'steps', 'raw_magnitude', 
+                           'filtered_magnitude', 'last_buzz', 'datetime'])
+        
+        print(f"Logging {self.device_name} data to: {log_path}")
+        return log_path
+    
+    def add_data(self, host_ts, device_ts, steps, raw, filtered, buzz_ts=None):
         with self.lock:
-            self.timestamps.append(timestamp)
+            self.host_ts.append(host_ts)
+            self.device_ts.append(device_ts)
             self.steps.append(steps)
             self.raw_accel.append(raw)
             self.filtered_accel.append(filtered)
+            self.last_buzz.append(buzz_ts)
+            
+            # Log to CSV
+            try:
+                with open(self.log_file, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        host_ts, device_ts, steps, raw, filtered, 
+                        buzz_ts if buzz_ts else '', 
+                        datetime.fromtimestamp(host_ts).strftime('%Y-%m-%d %H:%M:%S.%f')
+                    ])
+            except Exception as e:
+                print(f"Error writing to log: {e}")
     
     def get_data(self):
         with self.lock:
             return {
-                'timestamps': list(self.timestamps),
+                'timestamps': list(self.host_ts),
+                'device_ts': list(self.device_ts),
                 'steps': list(self.steps),
                 'raw_accel': list(self.raw_accel),
                 'filtered_accel': list(self.filtered_accel),
+                'last_buzz': list(self.last_buzz),
             }
 
-data_store = DataStore()
-
-@app.route('/api/step-data', methods=['POST'])
-def receive_data():
-    """Receive data from ESP32"""
-    try:
-        payload = request.json
-        
-        timestamp = payload.get('timestamp', datetime.now().timestamp())
-        steps = payload.get('steps', 0)
-        raw_magnitude = payload.get('raw_magnitude', 0)
-        filtered_magnitude = payload.get('filtered_magnitude', 0)
-        
-        data_store.add_data(timestamp, steps, raw_magnitude, filtered_magnitude)
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Steps: {steps}, "
-              f"Raw: {raw_magnitude:.2f}, Filtered: {filtered_magnitude:.2f}")
-        
-        return jsonify({'status': 'success'}), 200
-    except Exception as e:
-        print(f"Error receiving data: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+# Global dict of data stores by device address
+device_stores = {}
+device_stores_lock = threading.Lock()
 
 @app.route('/api/data', methods=['GET'])
 def get_data():
-    """Get all stored data"""
-    return jsonify(data_store.get_data()), 200
+    """Get all stored data for all devices"""
+    with device_stores_lock:
+        all_data = {addr: store.get_data() for addr, store in device_stores.items()}
+    return jsonify(all_data), 200
+
+@app.route('/api/devices', methods=['GET'])
+def get_devices():
+    """Get list of connected devices"""
+    with device_stores_lock:
+        devices = [{'address': addr, 'name': store.device_name} for addr, store in device_stores.items()]
+    return jsonify(devices), 200
+
+
+async def _ble_device_listener(device_address, device_name):
+    """Listen to a single BLE device."""
+    while True:
+        try:
+            print(f"[{device_name}] Connecting to {device_address}...")
+            async with BleakClient(device_address) as client:
+                # Get or create data store for this device
+                with device_stores_lock:
+                    if device_address not in device_stores:
+                        device_stores[device_address] = DataStore(device_name)
+                    data_store = device_stores[device_address]
+
+                async def handle_notification(_sender: int, data: bytearray):
+                    try:
+                        payload = json.loads(data.decode('utf-8'))
+                        host_ts = datetime.now().timestamp()
+                        device_ts = payload.get('timestamp', host_ts)
+                        steps = payload.get('steps', 0)
+                        raw_magnitude = payload.get('raw_magnitude', 0.0)
+                        filtered_magnitude = payload.get('filtered_magnitude', 0.0)
+                        buzz_device_ts = payload.get('last_buzz', 0.0)
+
+                        buzz_host_ts = None
+                        if buzz_device_ts and device_ts:
+                            buzz_host_ts = host_ts - (device_ts - buzz_device_ts)
+
+                        data_store.add_data(host_ts, device_ts, steps, raw_magnitude, filtered_magnitude, buzz_host_ts)
+
+                        buzz_info = f", Last buzz@{buzz_device_ts:.2f}s" if buzz_device_ts else ""
+                        print(f"[{device_name}] Steps: {steps}, Raw: {raw_magnitude:.2f}, "
+                              f"Filtered: {filtered_magnitude:.2f}{buzz_info}")
+                    except Exception as exc:
+                        print(f"[{device_name}] Error decoding notification: {exc}")
+
+                await client.start_notify(CHAR_UUID, handle_notification)
+                print(f"[{device_name}] Subscribed to telemetry. Listening...")
+
+                while True:
+                    await asyncio.sleep(1)
+
+        except Exception as exc:
+            print(f"[{device_name}] Connection error: {exc}. Reconnecting in 5s...")
+            await asyncio.sleep(5)
+
+
+async def _ble_scanner_loop():
+    """Continuously scan for new MoveQuest devices and spawn listeners."""
+    discovered_devices = set()
+    
+    while True:
+        try:
+            print("Scanning for MoveQuest devices...")
+            devices = await BleakScanner.discover(timeout=5.0)
+            
+            for device in devices:
+                if device.name and device.name.startswith(DEVICE_NAME_PREFIX):
+                    if device.address not in discovered_devices:
+                        discovered_devices.add(device.address)
+                        print(f"Found new device: {device.name} ({device.address})")
+                        # Spawn a listener task for this device
+                        asyncio.create_task(_ble_device_listener(device.address, device.name))
+            
+            await asyncio.sleep(10)  # Scan every 10 seconds
+            
+        except Exception as exc:
+            print(f"Scanner error: {exc}")
+            await asyncio.sleep(5)
+
+
+def start_ble_listener():
+    """Run the BLE scanner and listeners in their own thread/loop."""
+    loop = asyncio.new_event_loop()
+
+    def _run():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_ble_scanner_loop())
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
 
 def start_server():
     """Start Flask server in a thread"""
@@ -74,38 +189,73 @@ def start_server():
     serve(app, host='0.0.0.0', port=PORT)
 
 def plot_realtime():
-    """Create real-time plots"""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-    fig.suptitle('ESP32 Step Detection - Real-Time Monitoring', fontsize=14, fontweight='bold')
+    """Create real-time plots for all connected devices."""
+    fig = plt.figure(figsize=(14, 10))
+    fig.suptitle('MoveQuest Multi-Device Monitoring', fontsize=16, fontweight='bold')
     
     def animate(frame):
-        ax1.clear()
-        ax2.clear()
+        fig.clear()
         
-        data = data_store.get_data()
+        with device_stores_lock:
+            devices = list(device_stores.items())
         
-        if data['timestamps']:
-            # Calculate seconds from start
-            start_time = data['timestamps'][0]
-            time_axis = [(t - start_time) for t in data['timestamps']]
+        if not devices:
+            # Show waiting message
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'Waiting for devices...', 
+                   ha='center', va='center', fontsize=14)
+            ax.axis('off')
+            return
+        
+        # Calculate grid layout
+        num_devices = len(devices)
+        cols = 2 if num_devices > 1 else 1
+        rows = (num_devices + 1) // 2
+        
+        for idx, (device_addr, data_store) in enumerate(devices):
+            data = data_store.get_data()
+            
+            if not data['timestamps']:
+                continue
+            
+            # Create subplot for this device (2 rows per device: steps + accel)
+            base_idx = idx * 2
+            ax1 = plt.subplot(rows * 2, cols, base_idx + 1)
+            ax2 = plt.subplot(rows * 2, cols, base_idx + 2)
+            
+            time_axis = [mdates.date2num(datetime.fromtimestamp(ts)) for ts in data['timestamps'] if ts]
             
             # Plot 1: Step Count
             ax1.plot(time_axis, data['steps'], 'g-', linewidth=2, label='Steps')
             ax1.fill_between(time_axis, data['steps'], alpha=0.3, color='green')
-            ax1.set_ylabel('Step Count', fontsize=10, fontweight='bold')
-            ax1.set_title('Total Steps Detected', fontsize=11)
+            ax1.set_ylabel('Step Count', fontsize=9, fontweight='bold')
+            ax1.set_title(f'{data_store.device_name} - Steps', fontsize=10)
             ax1.grid(True, alpha=0.3)
-            ax1.legend()
+            ax1.legend(fontsize=8)
+
+            # Mark last buzz times on steps chart
+            buzz_times = [t for t in data['last_buzz'] if t]
+            if buzz_times:
+                buzz_axis = [mdates.date2num(datetime.fromtimestamp(bt)) for bt in buzz_times]
+                step_min = min(data['steps'], default=0)
+                step_max = max(data['steps'], default=1)
+                ax1.vlines(buzz_axis, ymin=step_min, ymax=step_max,
+                          colors='red', linestyles='dashed', linewidth=1, label='Motor buzz')
             
             # Plot 2: Acceleration Magnitude
             ax2.plot(time_axis, data['raw_accel'], 'b-', label='Raw Magnitude', alpha=0.6, linewidth=1)
             ax2.plot(time_axis, data['filtered_accel'], 'r-', label='Filtered Magnitude', linewidth=2)
             ax2.axhline(y=0.6, color='orange', linestyle='--', label='Step Threshold', linewidth=1)
-            ax2.set_xlabel('Time (seconds)', fontsize=10, fontweight='bold')
-            ax2.set_ylabel('Acceleration', fontsize=10, fontweight='bold')
-            ax2.set_title('Acceleration Magnitude', fontsize=11)
+            ax2.set_xlabel('Time', fontsize=9, fontweight='bold')
+            ax2.set_ylabel('Acceleration', fontsize=9, fontweight='bold')
+            ax2.set_title(f'{data_store.device_name} - Acceleration', fontsize=10)
             ax2.grid(True, alpha=0.3)
-            ax2.legend()
+            ax2.legend(fontsize=8)
+
+            # Time formatting
+            for ax in (ax1, ax2):
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+                ax.tick_params(labelsize=8)
         
         plt.tight_layout()
     
@@ -113,13 +263,23 @@ def plot_realtime():
     plt.show()
 
 if __name__ == '__main__':
+    print("=" * 60)
+    print("MoveQuest Multi-Device Data Logger & Visualizer")
+    print("=" * 60)
+    print(f"Log files will be saved to: {LOG_DIR.absolute()}")
+    print(f"API endpoints: http://localhost:{PORT}/api/data, /api/devices")
+    print("=" * 60)
+    
+    # Start BLE scanner/listeners
+    start_ble_listener()
+
     # Start server in background thread
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
     
-    # Give server time to start
+    # Give server and scanner time to start
     import time
-    time.sleep(2)
+    time.sleep(3)
     
     # Start real-time plotting
     try:

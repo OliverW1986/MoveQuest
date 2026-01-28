@@ -42,6 +42,8 @@ export default function Page() {
     if (devices.length > 0) {
       const toSave = devices.map((d) => ({ id: d.id, url: d.url, name: d.name }));
       localStorage.setItem("esp32-devices", JSON.stringify(toSave));
+    } else {
+      localStorage.removeItem("esp32-devices");
     }
   }, [devices]);
 
@@ -51,31 +53,22 @@ export default function Page() {
     );
   };
 
-  const refreshDevice = useCallback(async (deviceId: string) => {
-    setDevices((prev) => {
-      const device = prev.find((d) => d.id === deviceId);
-      if (!device) return prev;
-
-      const client = createESP32Client(device.url);
-      client.status()
-        .then((status) => client.sessions().then((sessionsData) => ({ status, sessionsData })))
-        .then(({ status, sessionsData }) => {
-          setDevices((p) =>
-            p.map((d) =>
-              d.id === deviceId
-                ? { ...d, status, sessions: sessionsData.sessions || [], error: null }
-                : d
-            )
-          );
-        })
-        .catch((err) => {
-          setDevices((p) =>
-            p.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
-          );
-        });
-
-      return prev;
-    });
+  const refreshDevice = useCallback(async (deviceId: string, url: string) => {
+    const client = createESP32Client(url);
+    try {
+      const [status, sessionsData] = await Promise.all([client.status(), client.sessions()]);
+      setDevices((prev) =>
+        prev.map((d) =>
+          d.id === deviceId
+            ? { ...d, status, sessions: sessionsData.sessions || [], error: null }
+            : d
+        )
+      );
+    } catch (err) {
+      setDevices((prev) =>
+        prev.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
+      );
+    }
   }, []);
 
   const addDevice = () => {
@@ -93,7 +86,7 @@ export default function Page() {
     setDevices((prev) => [...prev, device]);
     setNewDeviceUrl("");
     setNewDeviceName("");
-    setTimeout(() => refreshDevice(id), 100);
+    setTimeout(() => refreshDevice(id, device.url), 100);
   };
 
   const removeDevice = (deviceId: string) => {
@@ -102,12 +95,9 @@ export default function Page() {
 
   // Auto-refresh all devices
   useEffect(() => {
-    devices.forEach((d) => refreshDevice(d.id));
+    devices.forEach((d) => refreshDevice(d.id, d.url));
     const interval = setInterval(() => {
-      setDevices((prev) => {
-        prev.forEach((d) => refreshDevice(d.id));
-        return prev;
-      });
+      devices.forEach((d) => refreshDevice(d.id, d.url));
     }, 2000);
     return () => clearInterval(interval);
   }, [devices, refreshDevice]);
@@ -120,7 +110,7 @@ export default function Page() {
     try {
       const client = createESP32Client(device.url);
       await client.setConfig(intervalMs);
-      await refreshDevice(deviceId);
+      await refreshDevice(deviceId, device.url);
     } catch (err) {
       setDevices((prev) =>
         prev.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
@@ -138,7 +128,7 @@ export default function Page() {
     try {
       const client = createESP32Client(device.url);
       await client.startSession(sessionId);
-      await refreshDevice(deviceId);
+      await refreshDevice(deviceId, device.url);
     } catch (err) {
       setDevices((prev) =>
         prev.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
@@ -156,7 +146,7 @@ export default function Page() {
     try {
       const client = createESP32Client(device.url);
       await client.stopSession();
-      await refreshDevice(deviceId);
+      await refreshDevice(deviceId, device.url);
     } catch (err) {
       setDevices((prev) =>
         prev.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
@@ -174,7 +164,7 @@ export default function Page() {
     try {
       const client = createESP32Client(device.url);
       await client.triggerMotor();
-      await refreshDevice(deviceId);
+      await refreshDevice(deviceId, device.url);
     } catch (err) {
       setDevices((prev) =>
         prev.map((d) => (d.id === deviceId ? { ...d, error: (err as Error).message } : d))
@@ -220,7 +210,7 @@ export default function Page() {
 
       {devices.map((device) => (
         <DeviceCard
-          key={device.id}
+          key={`${device.id}-${device.status?.motorIntervalMs ?? ""}`}
           device={device}
           onRemove={() => removeDevice(device.id)}
           onSetInterval={(ms) => handleSetInterval(device.id, ms)}
@@ -254,14 +244,8 @@ function DeviceCard({
   onStop: () => void;
   onTriggerMotor: () => void;
 }) {
-  const [intervalMs, setIntervalMs] = useState(1800000);
+  const [intervalMs, setIntervalMs] = useState(() => device.status?.motorIntervalMs ?? 1800000);
   const [customSessionId, setCustomSessionId] = useState("");
-
-  useEffect(() => {
-    if (device.status?.motorIntervalMs !== undefined) {
-      setIntervalMs(device.status.motorIntervalMs);
-    }
-  }, [device.status?.motorIntervalMs]);
 
   const recentEvents = device.status?.recentEvents;
   const sparkline = useMemo(() => {

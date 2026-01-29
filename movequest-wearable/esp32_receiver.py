@@ -1,5 +1,5 @@
 import asyncio
-import json
+import struct
 import csv
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -116,25 +116,33 @@ async def _ble_device_listener(device_address, device_name):
 
                 async def handle_notification(_sender: int, data: bytearray):
                     try:
-                        payload = json.loads(data.decode('utf-8'))
+                        # Binary format: 4 bytes timestamp + 4 bytes steps + 4 bytes raw + 4 bytes filtered + 4 bytes buzz + 1 byte isActive
+                        if len(data) < 21:
+                            print(f"[{device_name}] Invalid packet size: {len(data)}")
+                            return
+                        
+                        # Unpack binary data (little-endian)
+                        ts, steps, raw_magnitude, filtered_magnitude, buzz_ts = struct.unpack('<IIfff', data[:20])
+                        is_active = data[20]
+                        
+                        # Convert device timestamp to host timestamp
                         host_ts = datetime.now().timestamp()
-                        device_ts = payload.get('timestamp', host_ts)
-                        steps = payload.get('steps', 0)
-                        raw_magnitude = payload.get('raw_magnitude', 0.0)
-                        filtered_magnitude = payload.get('filtered_magnitude', 0.0)
-                        buzz_device_ts = payload.get('last_buzz', 0.0)
-
+                        device_ts = float(ts)
+                        
                         buzz_host_ts = None
-                        if buzz_device_ts and device_ts:
-                            buzz_host_ts = host_ts - (device_ts - buzz_device_ts)
+                        if buzz_ts > 0 and device_ts > 0:
+                            buzz_host_ts = host_ts - (device_ts - buzz_ts)
 
                         data_store.add_data(host_ts, device_ts, steps, raw_magnitude, filtered_magnitude, buzz_host_ts)
 
-                        buzz_info = f", Last buzz@{buzz_device_ts:.2f}s" if buzz_device_ts else ""
-                        print(f"[{device_name}] Steps: {steps}, Raw: {raw_magnitude:.2f}, "
+                        activity_status = "ACTIVE" if is_active else "STATIONARY"
+                        buzz_info = f", Last buzz@{buzz_ts:.2f}s" if buzz_ts > 0 else ""
+                        print(f"[{device_name}] [{activity_status}] Steps: {steps}, Raw: {raw_magnitude:.2f}, "
                               f"Filtered: {filtered_magnitude:.2f}{buzz_info}")
+                    except struct.error as e:
+                        print(f"[{device_name}] Error unpacking binary data: {e}")
                     except Exception as exc:
-                        print(f"[{device_name}] Error decoding notification: {exc}")
+                        print(f"[{device_name}] Error processing notification: {exc}")
 
                 await client.start_notify(CHAR_UUID, handle_notification)
                 print(f"[{device_name}] Subscribed to telemetry. Listening...")

@@ -16,19 +16,30 @@
 #define LIS3DH_SDA_PIN 26
 #define LIS3DH_SCL_PIN 25
 
-#define STEP_THRESHOLD 0.6f
+#define STEP_THRESHOLD 0.4f
 #define STEP_DEBOUNCE_MS 250
 
+// BLE transmission intervals (milliseconds)
+const unsigned long SEND_INTERVAL_ACTIVE = 15000;    // 15 seconds when active
+const unsigned long SEND_INTERVAL_STATIONARY = 60000; // 60 seconds when stationary
+const unsigned long ACTIVITY_TIMEOUT = 30000;         // Consider stationary after 30s no steps
+
 unsigned long lastSendTime = 0;
-const int sendInterval = 2000;
+unsigned long lastActivityTime = 0;
+bool isActive = true;
 
 unsigned long lastStepTime = 0;
 int stepCount = 0;
 
 unsigned long lastMotorBuzz = 0;
 unsigned long motorInhibitUntil = 0;
-const unsigned long motorInterval = 30000; // Activate motor every 30 seconds
+const unsigned long motorInterval = 600000; // Activate motor every 10 minutes
 float lastBuzzSeconds = 0.0f;
+
+// LED blinking
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
+const unsigned long statusBlinkInterval = 2000; // Blink every 2 seconds when idle
 
 // BLE telemetry
 bool bleDeviceConnected = false;
@@ -81,25 +92,27 @@ void processAccelerometer(float ax, float ay, float az)
     {
       stepCount++;
       lastStepTime = now;
-      Serial.print("Step detected! Total steps: ");
-      Serial.println(stepCount);
+      lastActivityTime = now; // Mark activity
+      isActive = true;
+      // Serial.print("Step detected! Total steps: ");
+      // Serial.println(stepCount);
     }
   }
 
   previousMagnitude = magnitude;
 }
 
-// void handleData() {
-//   String response = String(millis()) + "," +
-//                     String(current_ax, 4) + "," +
-//                     String(current_ay, 4) + "," +
-//                     String(current_az, 4) + "," +
-//                     String(current_magnitude, 4) + "," +
-//                     String(current_filtered_magnitude, 4) + "," +
-//                     String(stepCount) + "\n";
-
-//   server.send(200, "text/plain", response);
-// }
+void blinkLed(uint8_t blinks)
+{
+  for (uint8_t i = 0; i < blinks; i++)
+  {
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    if (i + 1 < blinks)
+      delay(100);
+  }
+}
 
 void initBle()
 {
@@ -123,37 +136,65 @@ void initBle()
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
-  Serial.println("BLE advertising started (notify on telemetry characteristic).");
+  // Serial.println("BLE advertising started (notify on telemetry characteristic).");
 
-  digitalWrite(LED_PIN, HIGH); // Indicate BLE initialized
+  blinkLed(3); // Indicate BLE initialized with triple blink
 }
 
-void sendToBleClient()
+void updateStatusLed(unsigned long now)
+{
+  if (isActive)
+  {
+    // Quick blink pattern when active
+    if (now - lastBlinkTime >= 100)
+    {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+      lastBlinkTime = now;
+    }
+  }
+  else
+  {
+    // Slow blink pattern when stationary
+    if (now - lastBlinkTime >= statusBlinkInterval)
+    {
+      digitalWrite(LED_PIN, HIGH);
+      delay(50);
+      digitalWrite(LED_PIN, LOW);
+      lastBlinkTime = now;
+    }
+  }
+}
+
+void sendBinaryTelemetry()
 {
   if (!bleDeviceConnected || telemetryCharacteristic == nullptr)
   {
     return;
   }
 
-  StaticJsonDocument<256> jsonDoc;
-  jsonDoc["timestamp"] = millis() / 1000.0f;
-  jsonDoc["steps"] = stepCount;
-  jsonDoc["raw_magnitude"] = current_magnitude;
-  jsonDoc["filtered_magnitude"] = current_filtered_magnitude;
-  jsonDoc["last_buzz"] = lastBuzzSeconds;
+  // Binary format: 4 bytes timestamp + 4 bytes steps + 4 bytes raw + 4 bytes filtered + 4 bytes buzz + 1 byte isActive
+  uint8_t buffer[21];
+  uint32_t ts = millis() / 1000;
+  uint32_t steps32 = (uint32_t)stepCount;
+  
+  // Pack data (little-endian)
+  memcpy(buffer + 0, &ts, 4);
+  memcpy(buffer + 4, &steps32, 4);
+  memcpy(buffer + 8, &current_magnitude, 4);
+  memcpy(buffer + 12, &current_filtered_magnitude, 4);
+  memcpy(buffer + 16, &lastBuzzSeconds, 4);
+  buffer[20] = isActive ? 1 : 0;
 
-  String json;
-  serializeJson(jsonDoc, json);
-
-  telemetryCharacteristic->setValue(json.c_str());
+  telemetryCharacteristic->setValue(buffer, 21);
   telemetryCharacteristic->notify();
 
-  Serial.print("[BLE notify] Steps: ");
-  Serial.print(stepCount);
-  Serial.print(" | Raw: ");
-  Serial.print(current_magnitude);
-  Serial.print(" | Filtered: ");
-  Serial.println(current_filtered_magnitude);
+  // Serial.print("[BLE notify] Steps: ");
+  // Serial.print(stepCount);
+  // Serial.print(" | Raw: ");
+  // Serial.print(current_magnitude);
+  // Serial.print(" | Filtered: ");
+  // Serial.println(current_filtered_magnitude);
 }
 
 void buzzMotor(unsigned long now)
@@ -173,8 +214,11 @@ void buzzMotor(unsigned long now)
     for (uint8_t i = 0; i < buzzRepeats; i++)
     {
       digitalWrite(MOTOR_PIN, HIGH);
+      // Blink LED during buzz
+      digitalWrite(LED_PIN, HIGH);
       delay(buzzOn);
       digitalWrite(MOTOR_PIN, LOW);
+      digitalWrite(LED_PIN, LOW);
       if (i + 1 < buzzRepeats)
       {
         delay(buzzOff);
@@ -187,7 +231,7 @@ void buzzMotor(unsigned long now)
 
 void setup()
 {
-  Serial.begin(115200);
+  // Serial.begin(115200);
   Wire.begin(26, 25);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
@@ -198,36 +242,36 @@ void setup()
 
   // Prevent buzzing during boot while peripherals initialize
   motorInhibitUntil = millis() + 5000;
-
-  // pinMode(14, OUTPUT);
-  // digitalWrite(14, LOW);
-
-  // pinMode(33, OUTPUT);
-  // digitalWrite(33, HIGH);
+  lastActivityTime = millis();
 
   if (!lis.begin(0x18))
   {
-    Serial.println("Could not start LIS3DH");
+    // Serial.println("Could not start LIS3DH");
+    // Error blink pattern
+    for (int i = 0; i < 10; i++)
+    {
+      digitalWrite(LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(LED_PIN, LOW);
+      delay(100);
+    }
     while (1)
     {
       delay(10);
     }
   }
 
-  Serial.println("LIS3DH found!");
-
-  digitalWrite(LED_BUILTIN, HIGH); // Indicate LIS3DH initialized
+  // Serial.println("LIS3DH found!");
+  blinkLed(2); // Indicate LIS3DH initialized with double blink
 
   lis.setRange(LIS3DH_RANGE_2_G);
-  lis.setDataRate(LIS3DH_DATARATE_50_HZ);
+  lis.setDataRate(LIS3DH_DATARATE_25_HZ);
 
   initBle();
 }
 
 void loop()
 {
-  // server.handleClient();
-
   lis.read();
 
   current_ax = lis.x_g;
@@ -237,12 +281,24 @@ void loop()
   processAccelerometer(current_ax, current_ay, current_az);
 
   unsigned long now = millis();
-  buzzMotor(now);
-  if (now - lastSendTime >= sendInterval)
+  
+  // Update activity status
+  if (now - lastActivityTime > ACTIVITY_TIMEOUT)
   {
-    sendToBleClient();
+    isActive = false;
+  }
+
+  // Determine transmission interval based on activity
+  unsigned long currentSendInterval = isActive ? SEND_INTERVAL_ACTIVE : SEND_INTERVAL_STATIONARY;
+  
+  buzzMotor(now);
+  updateStatusLed(now);
+  
+  if (now - lastSendTime >= currentSendInterval)
+  {
+    sendBinaryTelemetry();
     lastSendTime = now;
   }
 
-  delay(20);
+  delay(10);
 }

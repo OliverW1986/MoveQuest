@@ -16,7 +16,7 @@
 #define LIS3DH_SDA_PIN 26
 #define LIS3DH_SCL_PIN 25
 
-#define STEP_THRESHOLD 0.4f
+#define STEP_THRESHOLD 0.3f
 #define STEP_DEBOUNCE_MS 250
 
 // BLE transmission intervals (milliseconds)
@@ -26,14 +26,14 @@ const unsigned long ACTIVITY_TIMEOUT = 30000;         // Consider stationary aft
 
 unsigned long lastSendTime = 0;
 unsigned long lastActivityTime = 0;
-bool isActive = true;
+bool isActive = false;
 
 unsigned long lastStepTime = 0;
 int stepCount = 0;
 
 unsigned long lastMotorBuzz = 0;
 unsigned long motorInhibitUntil = 0;
-const unsigned long motorInterval = 600000; // Activate motor every 10 minutes
+const unsigned long motorInterval = 1200000; // Activate motor every 20 minutes
 float lastBuzzSeconds = 0.0f;
 
 // LED blinking
@@ -138,7 +138,7 @@ void initBle()
   BLEDevice::startAdvertising();
   // Serial.println("BLE advertising started (notify on telemetry characteristic).");
 
-  blinkLed(3); // Indicate BLE initialized with triple blink
+  blinkLed(1); // Indicate BLE initialized with triple blink
 }
 
 void updateStatusLed(unsigned long now)
@@ -197,12 +197,12 @@ void sendBinaryTelemetry()
   // Serial.println(current_filtered_magnitude);
 }
 
-void buzzMotor(unsigned long now)
+bool buzzMotor(unsigned long now)
 {
   if (now < motorInhibitUntil)
   {
     lastMotorBuzz = now;
-    return;
+    return false;
   }
 
   static const unsigned long buzzOn = 120;
@@ -226,12 +226,15 @@ void buzzMotor(unsigned long now)
     }
     lastBuzzSeconds = millis() / 1000.0f;
     lastMotorBuzz = now;
+    return true;
   }
+
+  return false;
 }
 
 void setup()
 {
-  // Serial.begin(115200);
+  Serial.begin(115200);
   Wire.begin(26, 25);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
@@ -246,7 +249,7 @@ void setup()
 
   if (!lis.begin(0x18))
   {
-    // Serial.println("Could not start LIS3DH");
+    Serial.println("Could not start LIS3DH");
     // Error blink pattern
     for (int i = 0; i < 10; i++)
     {
@@ -261,7 +264,7 @@ void setup()
     }
   }
 
-  // Serial.println("LIS3DH found!");
+  Serial.println("LIS3DH found!");
   blinkLed(2); // Indicate LIS3DH initialized with double blink
 
   lis.setRange(LIS3DH_RANGE_2_G);
@@ -291,9 +294,15 @@ void loop()
   // Determine transmission interval based on activity
   unsigned long currentSendInterval = isActive ? SEND_INTERVAL_ACTIVE : SEND_INTERVAL_STATIONARY;
   
-  buzzMotor(now);
+  bool buzzed = buzzMotor(now);
   updateStatusLed(now);
   
+  if (buzzed)
+  {
+    sendBinaryTelemetry();
+    lastSendTime = now;
+  }
+
   if (now - lastSendTime >= currentSendInterval)
   {
     sendBinaryTelemetry();

@@ -253,7 +253,7 @@ def plot_realtime():
             # Plot 2: Acceleration Magnitude
             ax2.plot(time_axis, data['raw_accel'], 'b-', label='Raw Magnitude', alpha=0.6, linewidth=1)
             ax2.plot(time_axis, data['filtered_accel'], 'r-', label='Filtered Magnitude', linewidth=2)
-            ax2.axhline(y=0.6, color='orange', linestyle='--', label='Step Threshold', linewidth=1)
+            ax2.axhline(y=0.4, color='orange', linestyle='--', label='Step Threshold', linewidth=1)
             ax2.set_xlabel('Time', fontsize=9, fontweight='bold')
             ax2.set_ylabel('Acceleration', fontsize=9, fontweight='bold')
             ax2.set_title(f'{data_store.device_name} - Acceleration', fontsize=10)

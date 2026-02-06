@@ -14,6 +14,11 @@ from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
+
+def log(message):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}")
+
 # Configuration
 PORT = 5000
 MAX_DATA_POINTS = 200  # Keep last 200 data points
@@ -48,7 +53,7 @@ class DataStore:
             writer.writerow(['host_timestamp', 'device_timestamp', 'steps', 'raw_magnitude', 
                            'filtered_magnitude', 'last_buzz', 'datetime'])
         
-        print(f"Logging {self.device_name} data to: {log_path}")
+        log(f"Logging {self.device_name} data to: {log_path}")
         return log_path
     
     def add_data(self, host_ts, device_ts, steps, raw, filtered, buzz_ts=None):
@@ -70,7 +75,7 @@ class DataStore:
                         datetime.fromtimestamp(host_ts).strftime('%Y-%m-%d %H:%M:%S.%f')
                     ])
             except Exception as e:
-                print(f"Error writing to log: {e}")
+                log(f"Error writing to log: {e}")
     
     def get_data(self):
         with self.lock:
@@ -86,6 +91,10 @@ class DataStore:
 # Global dict of data stores by device address
 device_stores = {}
 device_stores_lock = threading.Lock()
+
+# Track discovered devices so we don't spawn duplicate listeners
+discovered_devices = set()
+discovered_devices_lock = threading.Lock()
 
 @app.route('/api/data', methods=['GET'])
 def get_data():
@@ -106,8 +115,14 @@ async def _ble_device_listener(device_address, device_name):
     """Listen to a single BLE device."""
     while True:
         try:
-            print(f"[{device_name}] Connecting to {device_address}...")
-            async with BleakClient(device_address) as client:
+            log(f"[{device_name}] Connecting to {device_address}...")
+            disconnected_event = asyncio.Event()
+
+            def _on_disconnect(_client):
+                log(f"[{device_name}] Disconnected.")
+                disconnected_event.set()
+
+            async with BleakClient(device_address, disconnected_callback=_on_disconnect) as client:
                 # Get or create data store for this device
                 with device_stores_lock:
                     if device_address not in device_stores:
@@ -118,7 +133,7 @@ async def _ble_device_listener(device_address, device_name):
                     try:
                         # Binary format: 4 bytes timestamp + 4 bytes steps + 4 bytes raw + 4 bytes filtered + 4 bytes buzz + 1 byte isActive
                         if len(data) < 21:
-                            print(f"[{device_name}] Invalid packet size: {len(data)}")
+                            log(f"[{device_name}] Invalid packet size: {len(data)}")
                             return
                         
                         # Unpack binary data (little-endian)
@@ -137,45 +152,51 @@ async def _ble_device_listener(device_address, device_name):
 
                         activity_status = "ACTIVE" if is_active else "STATIONARY"
                         buzz_info = f", Last buzz@{buzz_ts:.2f}s" if buzz_ts > 0 else ""
-                        print(f"[{device_name}] [{activity_status}] Steps: {steps}, Raw: {raw_magnitude:.2f}, "
-                              f"Filtered: {filtered_magnitude:.2f}{buzz_info}")
+                        log(f"[{device_name}] [{activity_status}] Steps: {steps}, Raw: {raw_magnitude:.2f}, "
+                            f"Filtered: {filtered_magnitude:.2f}{buzz_info}")
                     except struct.error as e:
-                        print(f"[{device_name}] Error unpacking binary data: {e}")
+                        log(f"[{device_name}] Error unpacking binary data: {e}")
                     except Exception as exc:
-                        print(f"[{device_name}] Error processing notification: {exc}")
+                        log(f"[{device_name}] Error processing notification: {exc}")
 
                 await client.start_notify(CHAR_UUID, handle_notification)
-                print(f"[{device_name}] Subscribed to telemetry. Listening...")
+                log(f"[{device_name}] Subscribed to telemetry. Listening...")
 
                 while True:
+                    if disconnected_event.is_set():
+                        raise Exception("Device disconnected")
                     await asyncio.sleep(1)
 
         except Exception as exc:
-            print(f"[{device_name}] Connection error: {exc}. Reconnecting in 5s...")
+            log(f"[{device_name}] Connection error: {exc}. Reconnecting in 5s...")
+            with discovered_devices_lock:
+                if device_address in discovered_devices:
+                    discovered_devices.remove(device_address)
             await asyncio.sleep(5)
 
 
 async def _ble_scanner_loop():
     """Continuously scan for new MoveQuest devices and spawn listeners."""
-    discovered_devices = set()
-    
     while True:
         try:
-            print("Scanning for MoveQuest devices...")
+            log("Scanning for MoveQuest devices...")
             devices = await BleakScanner.discover(timeout=5.0)
             
             for device in devices:
                 if device.name and device.name.startswith(DEVICE_NAME_PREFIX):
-                    if device.address not in discovered_devices:
-                        discovered_devices.add(device.address)
-                        print(f"Found new device: {device.name} ({device.address})")
+                    with discovered_devices_lock:
+                        already_discovered = device.address in discovered_devices
+                        if not already_discovered:
+                            discovered_devices.add(device.address)
+                    if not already_discovered:
+                        log(f"Found new device: {device.name} ({device.address})")
                         # Spawn a listener task for this device
                         asyncio.create_task(_ble_device_listener(device.address, device.name))
             
             await asyncio.sleep(10)  # Scan every 10 seconds
             
         except Exception as exc:
-            print(f"Scanner error: {exc}")
+            log(f"Scanner error: {exc}")
             await asyncio.sleep(5)
 
 
@@ -193,7 +214,7 @@ def start_ble_listener():
 
 def start_server():
     """Start Flask server in a thread"""
-    print(f"Starting server on http://localhost:{PORT}")
+    log(f"Starting server on http://localhost:{PORT}")
     serve(app, host='0.0.0.0', port=PORT)
 
 def plot_realtime():
@@ -271,12 +292,12 @@ def plot_realtime():
     plt.show()
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("MoveQuest Multi-Device Data Logger & Visualizer")
-    print("=" * 60)
-    print(f"Log files will be saved to: {LOG_DIR.absolute()}")
-    print(f"API endpoints: http://localhost:{PORT}/api/data, /api/devices")
-    print("=" * 60)
+    log("=" * 60)
+    log("MoveQuest Multi-Device Data Logger & Visualizer")
+    log("=" * 60)
+    log(f"Log files will be saved to: {LOG_DIR.absolute()}")
+    log(f"API endpoints: http://localhost:{PORT}/api/data, /api/devices")
+    log("=" * 60)
     
     # Start BLE scanner/listeners
     start_ble_listener()
@@ -293,4 +314,4 @@ if __name__ == '__main__':
     try:
         plot_realtime()
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        log("Shutting down...")

@@ -20,9 +20,9 @@
 #define STEP_DEBOUNCE_MS 250
 
 // BLE transmission intervals (milliseconds)
-const unsigned long SEND_INTERVAL_ACTIVE = 15000;    // 15 seconds when active
-const unsigned long SEND_INTERVAL_STATIONARY = 60000; // 60 seconds when stationary
-const unsigned long ACTIVITY_TIMEOUT = 30000;         // Consider stationary after 30s no steps
+const unsigned long SEND_INTERVAL_ACTIVE = 1000;    // 1 second when active
+const unsigned long SEND_INTERVAL_STATIONARY = 15000; // 15 seconds when stationary
+const unsigned long ACTIVITY_TIMEOUT = 10000;         // Consider stationary after 10s no steps
 
 unsigned long lastSendTime = 0;
 unsigned long lastActivityTime = 0;
